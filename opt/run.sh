@@ -1,4 +1,6 @@
-#!/bin/bash
+#!/bin/sh
+
+set -e
 
 echo "Setting up portal."
 echo "This deploys the portal only. Routing must also be deployed."
@@ -26,6 +28,25 @@ then
     exit 1
 fi
 
+docker start -ia dit4c_ssl_keys || docker run --name dit4c_ssl_keys \
+  -v $SSL_DIR/server.key:/etc/ssl/server.key \
+  -v $SSL_DIR/server.crt:/etc/ssl/server.crt \
+  --restart=no \
+  gentoobb/openssl sh -c \
+  "openssl rsa -in /etc/ssl/server.key -modulus -noout > /tmp/key_modulus; \
+   openssl x509 -modulus -in /etc/ssl/server.crt -noout > /tmp/cert_modulus; \
+   diff /tmp/key_modulus /tmp/cert_modulus"
+
+KEYS_EXIST=$?
+
+if [ $KEYS_EXIST ]
+then
+    echo "Required key and certificate are present and match"
+else
+    echo "Required key or certificate are missing/invalid in $SSL_DIR"
+    exit 1
+fi
+
 ETCD_IP=$(docker inspect -f "{{ .NetworkSettings.IPAddress }}" dit4c_etcd)
 ETCDCTL_CMD="docker run --rm -e ETCDCTL_PEERS=$ETCD_IP:2379 --entrypoint /etcdctl $ETCD_IMAGE --no-sync"
 
@@ -45,12 +66,19 @@ done
 
 # Create highcommand server
 docker start dit4c_highcommand || docker run -d --name dit4c_highcommand \
-    -v /var/log/dit4c_highcommand:/var/log \
     -v $CONFIG_DIR/dit4c-highcommand.conf:/etc/dit4c-highcommand.conf \
     --link dit4c_etcd:etcd \
     --link dit4c_couchdb:couchdb \
     dit4c/dit4c-platform-highcommand
 $ETCDCTL_CMD set "$SERVICE_DISCOVERY_PATH/dit4c_highcommand/$HOST" \
   $(docker inspect -f "{{ .NetworkSettings.IPAddress }}" dit4c_highcommand)
+
+# Create SSL reverse-proxy
+docker start dit4c_nghttpx ||docker run --name dit4c_nghttpx -d \
+  -p 443:3000 -v /opt/ssl/:/data \
+  -e HOST=highcommand -e PORT=9000 \
+  --link dit4c_highcommand:highcommand \
+  -e KEY_FILE=/data/server.key \
+  -e CERT_FILE=/data/server.crt dajobe/nghttpx
 
 echo "Done configuring portal."
