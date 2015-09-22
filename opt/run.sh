@@ -22,22 +22,26 @@ then
 fi
 
 docker start -ia dit4c_nghttpx_config || docker run -i --name dit4c_nghttpx_config \
-  -v /data/etc \
-  -v $SSL_DIR/server.key:/data/ssl/server.key:ro \
-  -v $SSL_DIR/server.crt:/data/ssl/server.crt:ro \
+  -v /etc/nghttpx \
+  -v $SSL_DIR/server.key:/etc/ssl/server.key:ro \
+  -v $SSL_DIR/server.crt:/etc/ssl/server.crt:ro \
   --restart=no \
   gentoobb/openssl sh <<SCRIPT
 set -e
 set -x
 
-openssl rsa -in /data/ssl/server.key -modulus -noout > /tmp/key_modulus
-openssl x509 -modulus -in /data/ssl/server.crt -noout > /tmp/cert_modulus
+openssl rsa -in /etc/ssl/server.key -modulus -noout > /tmp/key_modulus
+openssl x509 -modulus -in /etc/ssl/server.crt -noout > /tmp/cert_modulus
 diff /tmp/key_modulus /tmp/cert_modulus
 
-test -f /data/etc/nghttpx.conf || cat > /data/etc/nghttpx.conf <<CONFIG
+test -f /etc/nghttpx/nghttpx.conf || cat > /etc/nghttpx/nghttpx.conf <<CONFIG
 accesslog-file=/dev/stdout
 errorlog-file=/dev/stderr
-pid-file=/data/run/nghttpd.pid
+pid-file=/run/nghttpd.pid
+user=nobody
+
+backend=highcommand,9000
+frontend=*,3000
 
 ciphers=ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-DSS-AES128-GCM-SHA256:kEDH+AESGCM:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:ECDHE-ECDSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-DSS-AES128-SHA256:DHE-RSA-AES256-SHA256:DHE-DSS-AES256-SHA:DHE-RSA-AES256-SHA:ECDHE-RSA-DES-CBC3-SHA:ECDHE-ECDSA-DES-CBC3-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA256:AES256-SHA256:AES128-SHA:AES256-SHA:AES:CAMELLIA:DES-CBC3-SHA
 add-response-header=Strict-Transport-Security: max-age=15724800; includeSubDomains;
@@ -83,12 +87,9 @@ $ETCDCTL_CMD set "$SERVICE_DISCOVERY_PATH/dit4c_highcommand/$HOST" \
 docker start dit4c_nghttpx || docker run --name dit4c_nghttpx -d \
   -p 443:3000 \
   --volumes-from dit4c_nghttpx_config \
-  -e HOST=highcommand -e PORT=9000 \
   --link dit4c_highcommand:highcommand \
-  -e KEY_FILE=/data/ssl/server.key \
-  -e CERT_FILE=/data/ssl/server.crt \
   --restart always \
-  dajobe/nghttpx
+  tsing/nghttpx /etc/ssl/server.key /etc/ssl/server.crt
 
 # Create simple HTTP->HTTPS redirect server
 docker start dit4c_http_redirect || docker run --name dit4c_http_redirect -d \
